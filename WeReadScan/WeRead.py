@@ -9,10 +9,16 @@ from PIL import Image
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
 
 from .script import img2pdf, dir_check, os_start_file, clear_temp, escape
 
 from time import sleep
+import os
+import requests
+import time
 
 
 class WeRead:
@@ -92,50 +98,215 @@ class WeRead:
                 return True
         return False
 
-    def login(self, wait_turns=15):
-        """
-        show QRCode to login weread.
-
-        展示二维码以登陆微信读书
-
-        :Args:
-         - wait_turns: 
-                Loop turns wait for scanning QRCode
-                登陆二维码等待扫描的等待轮数
-
-        :Usage:
-            weread.login()
-        """
-
-        dir_check('wrs-temp')
-
-        # get QRCode for Login
-        self.S('button.navBar_link_Login').click()
-        self.S('.login_dialog_qrcode>img').screenshot(
-            'wrs-temp/login_qrcode.png')
-
-        login_qrcode = Image.open('wrs-temp/login_qrcode.png')
-        plt.ion()
-        plt.title('Scan this QRCode to Login.')
-        plt.imshow(login_qrcode)
-        plt.show()
-        plt.pause(.001)
-
-        # wair for QRCode Scan
-        for i in range(wait_turns):
-            print(f'Wait for QRCode Scan...{i}/{wait_turns}turns')
+    def login(self):
+        """登录微信读书"""
+        print("开始登录流程...")
+        
+        # 确保我们在主页上
+        if not self.driver.current_url.endswith("weread.qq.com/"):
+            print("重定向到主页...")
+            self.driver.get("https://weread.qq.com/")
+            time.sleep(2)
+        
+        print("等待页面加载...")
+        print(f"页面标题: {self.driver.title}")
+        print(f"当前URL: {self.driver.current_url}")
+        
+        # 等待页面完全加载
+        time.sleep(5)
+        
+        print("正在查找登录按钮...")
+        login_button = None
+        
+        # 尝试多个选择器来查找登录按钮
+        selectors = [
+            (By.XPATH, "//a[text()='登录']"),
+            (By.XPATH, "//a[contains(text(), '登录')]"),
+            (By.CSS_SELECTOR, "a[href*='login']"),
+            (By.CSS_SELECTOR, ".login_button"),
+            (By.CSS_SELECTOR, "[class*='login']"),
+            (By.CSS_SELECTOR, "a.navBar_link"),
+            (By.CSS_SELECTOR, ".navBar_link"),
+            (By.CSS_SELECTOR, ".wr_btn_item"),
+            (By.CSS_SELECTOR, ".navBar_item")
+        ]
+        
+        for by, selector in selectors:
             try:
-                self.driver.find_element(By.CSS_SELECTOR, '.menu_container')
-                print('Login Succeed.')
-                break
-            except Exception:
-                plt.pause(1)
+                elements = self.driver.find_elements(by, selector)
+                print(f"使用选择器 {selector} 找到 {len(elements)} 个元素")
+                for element in elements:
+                    print(f"元素文本: {element.text}")
+                    print(f"元素HTML: {element.get_attribute('outerHTML')}")
+                    if element.is_displayed() and ('登录' in element.text or 'login' in element.get_attribute('outerHTML').lower()):
+                        login_button = element
+                        break
+                if login_button:
+                    break
+            except Exception as e:
+                print(f"选择器 {selector} 失败: {e}")
+                continue
+        
+        if login_button:
+            try:
+                print("找到登录按钮，准备点击")
+                # 尝试滚动到按钮位置
+                self.driver.execute_script("arguments[0].scrollIntoView(true);", login_button)
+                time.sleep(1)
+                
+                # 尝试移动到按钮位置
+                actions = ActionChains(self.driver)
+                actions.move_to_element(login_button).perform()
+                time.sleep(1)
+                
+                # 尝试点击
+                login_button.click()
+                print("已点击登录按钮")
+                
+                # 等待一下让页面响应
+                time.sleep(3)
+                
+            except Exception as e:
+                print(f"点击登录按钮失败: {e}")
+                try:
+                    print("尝试使用JavaScript点击")
+                    self.driver.execute_script("arguments[0].click();", login_button)
+                    print("JavaScript点击成功")
+                    time.sleep(3)
+                except Exception as e:
+                    print(f"JavaScript点击也失败了: {e}")
+                    raise Exception("无法点击登录按钮")
         else:
-            raise Exception('WeRead.Timeout: Login timeout.')
-
-        # close QRCode Window
-        plt.ioff()
-        plt.close()
+            print("尝试使用JavaScript查找和点击登录按钮...")
+            try:
+                # 尝试多个JavaScript选择器
+                js_selectors = [
+                    "document.querySelector('a[href*=\"login\"]')",
+                    "document.querySelector('.login_button')",
+                    "document.querySelector('[class*=\"login\"]')",
+                    "Array.from(document.querySelectorAll('a')).find(a => a.textContent.includes('登录'))",
+                    "document.querySelector('.navBar_link')",
+                    "document.querySelector('.wr_btn_item')",
+                    "document.querySelector('.navBar_item')"
+                ]
+                
+                for selector in js_selectors:
+                    print(f"尝试JavaScript选择器: {selector}")
+                    result = self.driver.execute_script(f"return {selector}")
+                    if result:
+                        print(f"找到元素: {self.driver.execute_script(f'return {selector}.outerHTML')}")
+                        self.driver.execute_script(f"{selector}.click()")
+                        print("JavaScript点击成功")
+                        time.sleep(3)
+                        break
+                else:
+                    raise Exception("无法找到登录按钮")
+            except Exception as e:
+                print(f"JavaScript操作失败: {e}")
+                raise Exception("无法找到或点击登录按钮")
+        
+        print("正在等待二维码出现...")
+        try:
+            # 等待登录对话框出现
+            dialog_selectors = [
+                '.login_dialog',
+                '.login_container',
+                '.login_qrcode_wrapper',
+                '.login_qrcode',
+                '[class*="login"]'
+            ]
+            
+            dialog = None
+            max_attempts = 30  # 最多等待30秒
+            for attempt in range(max_attempts):
+                print(f"尝试查找登录对话框，第 {attempt + 1} 次...")
+                for selector in dialog_selectors:
+                    try:
+                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        print(f"使用选择器 {selector} 找到 {len(elements)} 个元素")
+                        for element in elements:
+                            if element.is_displayed():
+                                print(f"找到可见的对话框元素: {element.get_attribute('outerHTML')}")
+                                dialog = element
+                                break
+                        if dialog:
+                            break
+                    except:
+                        continue
+                if dialog:
+                    break
+                time.sleep(1)
+            
+            if not dialog:
+                print("无法找到登录对话框，尝试截取整个页面...")
+                if not os.path.exists('wrs-temp'):
+                    os.makedirs('wrs-temp')
+                self.driver.save_screenshot('wrs-temp/login_page.png')
+                print("已保存页面截图到 wrs-temp/login_page.png")
+                raise Exception("无法找到登录对话框")
+            
+            # 给二维码加载一些时间
+            time.sleep(3)
+            
+            # 尝试多个选择器来查找二维码
+            qrcode_selectors = [
+                '.login_dialog_qrcode img',
+                '.login_qrcode img',
+                'img[class*="qrcode"]',
+                '.login_dialog img',
+                '.login_qrcode_wrapper img',
+                '.login_container img',
+                'img[src*="qrcode"]'
+            ]
+            
+            qrcode = None
+            for selector in qrcode_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    print(f"使用选择器 {selector} 找到 {len(elements)} 个元素")
+                    for element in elements:
+                        print(f"元素HTML: {element.get_attribute('outerHTML')}")
+                        if element.is_displayed():
+                            qrcode = element
+                            break
+                    if qrcode:
+                        break
+                except:
+                    continue
+            
+            if not qrcode:
+                print("未找到二维码，尝试截取整个登录对话框...")
+                if not os.path.exists('wrs-temp'):
+                    os.makedirs('wrs-temp')
+                dialog.screenshot('wrs-temp/login_qrcode.png')
+                print("已保存登录对话框截图到 wrs-temp/login_qrcode.png")
+                return
+            
+            # 获取二维码图片URL
+            qrcode_url = qrcode.get_attribute('src')
+            print(f"找到二维码图片: {qrcode_url}")
+            
+            # 下载二维码图片
+            if not os.path.exists('wrs-temp'):
+                os.makedirs('wrs-temp')
+            
+            response = requests.get(qrcode_url)
+            with open('wrs-temp/login_qrcode.png', 'wb') as f:
+                f.write(response.content)
+            print("二维码已保存到 wrs-temp/login_qrcode.png")
+            
+            # 等待用户扫码
+            print("请使用微信扫描二维码登录...")
+            WebDriverWait(self.driver, 300).until(
+                lambda x: 'login' not in x.current_url
+            )
+            print("登录成功！")
+            
+        except Exception as e:
+            print(f"查找二维码时出错: {e}")
+            print("页面源码：")
+            print(self.driver.page_source)
+            raise Exception("无法找到二维码")
 
     def switch_to_context(self):
         """switch to main body of the book"""
